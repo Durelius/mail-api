@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,11 +24,12 @@ const maxBody = 1 << 20
 type Server struct {
 	cfg     *Config
 	sender  Sender
+	store   *Store
 	limiter *limiter
 }
 
-func NewServer(cfg *Config, sender Sender) *Server {
-	return &Server{cfg: cfg, sender: sender, limiter: newLimiter(5, 10*time.Minute)}
+func NewServer(cfg *Config, sender Sender, store *Store) *Server {
+	return &Server{cfg: cfg, sender: sender, store: store, limiter: newLimiter(5, 10*time.Minute)}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -36,6 +38,8 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("POST /mail/send", s.handleSend)
+	mux.HandleFunc("POST /mail/schedule", s.handleSchedule)
+	mux.HandleFunc("DELETE /mail/schedule/{id}", s.handleCancel)
 	mux.HandleFunc("POST /mail/contact/{site}", s.handleContact)
 	mux.HandleFunc("OPTIONS /mail/contact/{site}", s.handleContact)
 	return mux
@@ -105,6 +109,70 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.deliver(w, r, who, m)
+}
+
+// ScheduleRequest is a Mail plus the time it should go out.
+type ScheduleRequest struct {
+	Mail
+	SendAt time.Time `json:"sendAt"`
+}
+
+// handleSchedule stores a mail to be sent by the scheduler at sendAt. The test
+// header is stored with it and applied when it is sent.
+func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
+	who, ok := s.client(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid api key")
+		return
+	}
+	var req ScheduleRequest
+	if err := decode(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if req.SendAt.IsZero() {
+		writeError(w, http.StatusBadRequest, "sendAt is required (RFC 3339, e.g. 2026-11-01T09:00:00+01:00)")
+		return
+	}
+	if req.SendAt.After(time.Now().Add(maxScheduleAhead)) {
+		writeError(w, http.StatusBadRequest, "sendAt is more than a year ahead")
+		return
+	}
+	if err := s.cfg.Validate(&req.Mail); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	test := isTest(r)
+	id, err := s.store.Add(who, req.Mail, req.SendAt, test)
+	if err != nil {
+		log.Printf("schedule failed client=%s: %v", who, err)
+		writeError(w, http.StatusInternalServerError, "failed to schedule email")
+		return
+	}
+	log.Printf("scheduled id=%d client=%s to=%v at=%s test=%t", id, who, req.To, req.SendAt.Format(time.RFC3339), test)
+	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "id": id, "sendAt": req.SendAt, "test": test})
+}
+
+func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
+	who, ok := s.client(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid api key")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	switch err := s.store.Cancel(who, id); {
+	case errors.Is(err, errNotFound):
+		writeError(w, http.StatusNotFound, "no pending email with that id")
+	case err != nil:
+		log.Printf("cancel failed id=%d: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "failed to cancel")
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	}
 }
 
 // Contact is the body of a public contact form.

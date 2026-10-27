@@ -27,6 +27,31 @@ Needs `X-Api-Key`. Sends to any address, from any address at
 
 `from` defaults to `DEFAULT_FROM`. Give `text`, `html` or both.
 
+### `POST /mail/schedule` (delayed mail, backends on the VPS)
+
+Same key and body as `/mail/send`, plus `sendAt` in RFC 3339, at most a year
+ahead:
+
+```json
+{
+  "to": ["someone@example.com"],
+  "subject": "Reminder",
+  "text": "Your booking is tomorrow.",
+  "sendAt": "2026-11-01T09:00:00+01:00"
+}
+```
+
+Answers `201` with `{"id": 12, ...}`. The mail is stored in SQLite
+(`DB_PATH`) and sent by a check that runs at start-up and every
+`CHECK_INTERVAL` (default `15m`), so it goes out up to that long after
+`sendAt`. A send that fails is retried on the next check, up to 5 times. The
+`X-Mail-Test` header is stored with the mail and applied when it is sent.
+
+### `DELETE /mail/schedule/{id}`
+
+Cancels a mail that hasn't been sent yet. Needs the key of the client that
+scheduled it; answers `404` if there is no such pending mail.
+
 ### `POST /mail/contact/{site}` (public contact forms)
 
 No key. The recipient comes from `sites.json`, never from the request, so the
@@ -49,7 +74,7 @@ ProxyPassReverse /mail/contact/ http://127.0.0.1:5300/mail/contact/
 
 ## Test mode
 
-Add an `X-Mail-Test` header (any value) to either endpoint and the mail goes to
+Add an `X-Mail-Test` header (any value) to any sending endpoint and the mail goes to
 `TEST_RECIPIENT` (`test@wilhelm.my`) instead of the real recipients. The
 subject becomes `[TEST to <real recipients>] ...` and the real recipients are
 kept in an `X-Original-To` header.

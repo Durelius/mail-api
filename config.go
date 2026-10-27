@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is read from the environment; contact sites come from a JSON file
@@ -17,6 +18,8 @@ type Config struct {
 	DefaultFrom        string
 	AllowedFromDomains []string
 	TestRecipient      string
+	DBPath             string
+	CheckInterval      time.Duration
 	APIKeys            map[string]string // key -> client name
 	Sites              map[string]Site
 }
@@ -43,12 +46,18 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SMTP_PORT: %w", err)
 	}
+	interval, err := time.ParseDuration(env("CHECK_INTERVAL", "15m"))
+	if err != nil || interval <= 0 {
+		return nil, fmt.Errorf("CHECK_INTERVAL: must be a duration like 15m")
+	}
 	cfg := &Config{
 		ListenAddr:    env("LISTEN_ADDR", "127.0.0.1:5300"),
 		SMTPHost:      env("SMTP_HOST", "127.0.0.1"),
 		SMTPPort:      port,
 		DefaultFrom:   env("DEFAULT_FROM", "noreply@wilhelm.my"),
 		TestRecipient: env("TEST_RECIPIENT", "test@wilhelm.my"),
+		DBPath:        env("DB_PATH", "/var/lib/mail-api/mail-api.db"),
+		CheckInterval: interval,
 		APIKeys:       map[string]string{},
 		Sites:         map[string]Site{},
 	}

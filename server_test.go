@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,14 +12,26 @@ import (
 	gomail "github.com/wneessen/go-mail"
 )
 
-type fakeSender struct{ sent []*gomail.Msg }
+type fakeSender struct {
+	sent []*gomail.Msg
+	fail error
+}
 
 func (f *fakeSender) Send(_ context.Context, m *gomail.Msg) error {
+	if f.fail != nil {
+		return f.fail
+	}
 	f.sent = append(f.sent, m)
 	return nil
 }
 
-func testServer() (*Server, *fakeSender) {
+func testServer(t *testing.T) (*Server, *fakeSender) {
+	t.Helper()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
 	cfg := &Config{
 		DefaultFrom:        "noreply@wilhelm.my",
 		AllowedFromDomains: []string{"wilhelm.my"},
@@ -30,7 +43,7 @@ func testServer() (*Server, *fakeSender) {
 		}},
 	}
 	f := &fakeSender{}
-	return NewServer(cfg, f), f
+	return NewServer(cfg, f, store), f
 }
 
 func do(s *Server, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -58,7 +71,7 @@ func recipients(t *testing.T, m *gomail.Msg) []string {
 const sendBody = `{"to":["user@example.com"],"subject":"Hi","text":"hello"}`
 
 func TestSendRequiresKey(t *testing.T) {
-	s, f := testServer()
+	s, f := testServer(t)
 	if rec := do(s, "POST", "/mail/send", sendBody, nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d", rec.Code)
 	}
@@ -71,7 +84,7 @@ func TestSendRequiresKey(t *testing.T) {
 }
 
 func TestSendDelivers(t *testing.T) {
-	s, f := testServer()
+	s, f := testServer(t)
 	rec := do(s, "POST", "/mail/send", sendBody, map[string]string{"X-Api-Key": "0123456789abcdef"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body)
@@ -82,7 +95,7 @@ func TestSendDelivers(t *testing.T) {
 }
 
 func TestTestHeaderReroutes(t *testing.T) {
-	s, f := testServer()
+	s, f := testServer(t)
 	rec := do(s, "POST", "/mail/send", sendBody, map[string]string{"X-Api-Key": "0123456789abcdef", TestHeader: ""})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body)
@@ -97,7 +110,7 @@ func TestTestHeaderReroutes(t *testing.T) {
 }
 
 func TestSendRejectsForeignFrom(t *testing.T) {
-	s, _ := testServer()
+	s, _ := testServer(t)
 	body := `{"from":"ceo@bank.com","to":["user@example.com"],"subject":"Hi","text":"hello"}`
 	if rec := do(s, "POST", "/mail/send", body, map[string]string{"X-Api-Key": "0123456789abcdef"}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d", rec.Code)
@@ -105,7 +118,7 @@ func TestSendRejectsForeignFrom(t *testing.T) {
 }
 
 func TestContactUsesSiteRecipient(t *testing.T) {
-	s, f := testServer()
+	s, f := testServer(t)
 	body := `{"email":"guest@example.com","phone":"0701234567","message":"Boka DJ"}`
 	rec := do(s, "POST", "/mail/contact/dj", body, map[string]string{"Origin": "https://djcarldurelius.se"})
 	if rec.Code != http.StatusOK {
@@ -120,7 +133,7 @@ func TestContactUsesSiteRecipient(t *testing.T) {
 }
 
 func TestContactIgnoresInjectedRecipient(t *testing.T) {
-	s, f := testServer()
+	s, f := testServer(t)
 	body := `{"email":"guest@example.com","to":["victim@example.com"]}`
 	if rec := do(s, "POST", "/mail/contact/dj", body, nil); rec.Code != http.StatusBadRequest {
 		t.Fatalf("got %d", rec.Code)
@@ -131,14 +144,14 @@ func TestContactIgnoresInjectedRecipient(t *testing.T) {
 }
 
 func TestContactUnknownSite(t *testing.T) {
-	s, _ := testServer()
+	s, _ := testServer(t)
 	if rec := do(s, "POST", "/mail/contact/nope", `{"email":"a@b.se"}`, nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("got %d", rec.Code)
 	}
 }
 
 func TestContactRateLimited(t *testing.T) {
-	s, _ := testServer()
+	s, _ := testServer(t)
 	s.limiter = newLimiter(2, time.Minute)
 	body := `{"email":"guest@example.com","message":"hi"}`
 	codes := []int{}

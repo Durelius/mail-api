@@ -13,6 +13,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# Scheduled mail lives in /var/lib/mail-api/mail-api.db.
+StateDirectory=mail-api
+StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
