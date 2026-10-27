@@ -1,0 +1,9 @@
+{
+  "djcarldurelius": {
+    "to": ["carl@example.com"],
+    "from": "noreply@wilhelm.my",
+    "fromName": "DJ service",
+    "subject": "DJ Service: Ny förfrågan från",
+    "origins": ["https://djcarldurelius.se", "https://www.djcarldurelius.se", "http://localhost:5173"]
+  }
+}

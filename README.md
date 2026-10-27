@@ -1,0 +1,84 @@
+# mail-api
+
+Small Go service that sends mail for the sites on the Linode VPS. It hands
+mail to the local Postfix on `127.0.0.1:25`, which trusts localhost and
+DKIM-signs for `wilhelm.my`, so it needs no SMTP password.
+
+It listens on `127.0.0.1:5300` only.
+
+## Endpoints
+
+### `POST /mail/send` (backends on the VPS)
+
+Needs `X-Api-Key`. Sends to any address, from any address at
+`ALLOWED_FROM_DOMAINS`.
+
+```json
+{
+  "from": "admin@wilhelm.my",
+  "fromName": "Helptype",
+  "to": ["someone@example.com"],
+  "replyTo": "optional@example.com",
+  "subject": "Hello",
+  "text": "plain body",
+  "html": "<p>html body</p>"
+}
+```
+
+`from` defaults to `DEFAULT_FROM`. Give `text`, `html` or both.
+
+### `POST /mail/contact/{site}` (public contact forms)
+
+No key. The recipient comes from `sites.json`, never from the request, so the
+endpoint can't be used to send mail to arbitrary people. Rate limited to 5
+requests per 10 minutes per client IP. Apache proxies it, e.g. on
+djcarldurelius.se:
+
+```apache
+ProxyPass        /mail/contact/ http://127.0.0.1:5300/mail/contact/
+ProxyPassReverse /mail/contact/ http://127.0.0.1:5300/mail/contact/
+```
+
+```json
+{ "name": "", "email": "guest@example.com", "phone": "070...", "message": "..." }
+```
+
+`email` or `phone` is required; `email` becomes the Reply-To.
+
+### `GET /mail/health`
+
+## Test mode
+
+Add an `X-Mail-Test` header (any value) to either endpoint and the mail goes to
+`TEST_RECIPIENT` (`test@wilhelm.my`) instead of the real recipients. The
+subject becomes `[TEST to <real recipients>] ...` and the real recipients are
+kept in an `X-Original-To` header.
+
+## Config
+
+Environment, see `deploy/mail-api.env.example`. Contact sites live in the file
+named by `SITES_FILE`, see `deploy/sites.example.json`. On the VPS both are in
+`/etc/mail-api/`.
+
+## Deploy
+
+```bash
+HOST=user@server ./deploy.sh
+```
+
+`SSH_KEY` defaults to `~/.ssh/id_ed25519_nopass`.
+
+Runs the tests, builds a linux/amd64 binary, installs it to
+`/usr/local/bin/mail-api` with `deploy/mail-api.service`, and restarts it.
+Config in `/etc/mail-api/` is not touched.
+
+First-time setup on the VPS (already done):
+
+```bash
+sudo useradd --system --no-create-home --shell /sbin/nologin mailapi
+sudo mkdir /etc/mail-api   # then add mail-api.env and sites.json
+sudo chown -R root:mailapi /etc/mail-api && sudo chmod 750 /etc/mail-api && sudo chmod 640 /etc/mail-api/*
+sudo systemctl enable mail-api
+```
+
+`test@wilhelm.my` is an alias in `/etc/aliases`.
