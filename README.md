@@ -79,6 +79,22 @@ Add an `X-Mail-Test` header (any value) to any sending endpoint and the mail goe
 subject becomes `[TEST to <real recipients>] ...` and the real recipients are
 kept in an `X-Original-To` header.
 
+## `schedule` CLI
+
+`cli/schedule.py` schedules a reminder from your own machine. It asks for the
+time (`18:00`, `tomorrow 09:00`, `friday 14:30`, `in 2h`, ...), recipient,
+subject and message one at a time, sends them to `POST /mail/schedule` over
+SSH, and can also add the reminder to macOS Calendar with an alert. Standard
+library only.
+
+```bash
+ln -s "$PWD/cli/schedule.py" ~/.local/bin/schedule
+```
+
+It reads `~/.config/mail-api/config.json` (host, SSH key, defaults and
+calendar; see the top of the script) and the API key from
+`~/.config/mail-api/key`.
+
 ## Config
 
 Environment, see `deploy/mail-api.env.example`. Contact sites live in the file
